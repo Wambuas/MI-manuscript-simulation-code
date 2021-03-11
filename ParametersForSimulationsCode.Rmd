@@ -1,0 +1,314 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+
+rm(list = ls())
+library(foreign)
+library(readxl)
+library(readstata13)
+library(haven)
+library(xlsx)
+library(tidyverse)
+library(matrixStats)
+library(mice)
+library(miceadds)
+library(micemd)
+library(jomo)
+library(mitml)
+library(lme4)
+#---------------------------------------------ALL HOSPITALS------------------------------------------------
+IP100=read.dta13("IP_100.dta")
+
+
+#============REMOVING OUTLIERS
+IP100$value=ifelse(IP100$value==53185,NA,IP100$value)
+IP100$value=ifelse(IP100$value==17023,NA,IP100$value)
+IP100$value=ifelse(IP100$value==1348,NA,IP100$value)
+IP100$value=ifelse(IP100$value==1002,NA,IP100$value)
+IP100$value=ifelse(IP100$value==3428,NA,IP100$value)
+IP100$value=ifelse(IP100$value==2121,NA,IP100$value)
+IP100$value=ifelse(IP100$value==2680,NA,IP100$value)
+IP100$value=ifelse(IP100$value==1621,NA,IP100$value)
+#============
+
+IP100$month2=sub("2.*", "", IP100$variable)
+IP100$year=str_sub(IP100$variable, - 4, - 1) 
+IP100$year1=factor(IP100$year,levels = c("2018","2019","2020"))
+IP100$year=IP100$year1
+IP100$year1=NULL
+
+IP100$FacilityID=group_indices(IP100, Organisation_unit)
+IP100$indicatorID=group_indices(IP100, Indicator)
+
+IP100$type1=ifelse(IP100$Ownership=="MoH","Public","Private")
+
+IP100$Month=ifelse(IP100$month2=="Jan","1",ifelse(IP100$month2=="Feb","2",ifelse(IP100$month2=="Mar","3",ifelse(IP100$month2=="Apr","4",ifelse(IP100$month2=="May","5",ifelse(IP100$month2=="June","6",ifelse(IP100$month2=="July","7",ifelse(IP100$month2=="Aug","8",ifelse(IP100$month2=="Sep","9",ifelse(IP100$month2=="Oct","10",ifelse(IP100$month2=="Nov","11","12")))))))))))
+
+
+IP100$Month=factor(IP100$Month,levels = c("1","2","3","4","5","6","7","8","9","10","11","12"))
+
+IP100$type2=ifelse(IP100$type1=="Private",0,1)
+IP100$CIN=ifelse(IP100$CIN=="N",0,1)
+
+
+IP100$FacilityID=as.factor(IP100$FacilityID)
+IP100$type2=as.factor(IP100$type2)
+IP100$CIN=as.factor(IP100$CIN)
+IP100$value=sqrt(IP100$value)  #transforming data using squareroot transformation
+IP100$indicatorID=as.factor(IP100$indicatorID)
+
+IP100$Level=ifelse(IP100$FacilityID=="87","Level 4",IP100$Level)
+
+IP=IP100[,c(3,5:9,11,12,15,16)]
+
+#========Hospital covariates parameters
+
+IP2=IP[,c(1:6,8)]
+
+wide1=IP2 %>% 
+  spread(variable, value)
+
+wide1$Type=ifelse(wide1$Ownership=="MoH","Public","Private")
+wide1$Type=ifelse(wide1$Type=="Private",0,1)
+wide1$Type=as.factor(wide1$Type)
+
+
+#=========================================================Type and CIN parameters
+wide2=subset(wide1,wide1$Indicator=="Total_deliveries_MATERNITY")
+
+m <- glm(Type ~ FacilityID, data = wide2, family = binomial(link = "logit"))
+saveRDS(m,"OwnershipModel.rds")
+
+m <- glm(CIN ~ Type + FacilityID, data = wide2, family = binomial(link = "logit"))
+saveRDS(m,"CINModel.rds")
+#===========================================================
+
+wide1=IP %>% 
+  spread(Indicator, value)
+
+#combining month and year
+wide1$Time=ifelse(wide1$variable=="Jan2018",1.1,ifelse(wide1$variable=="Feb2018",1.2,ifelse(wide1$variable=="Mar2018",1.3,ifelse(wide1$variable=="Apr2018",1.4,ifelse(wide1$variable=="May2018",1.5,ifelse(wide1$variable=="June2018",1.6,ifelse(wide1$variable=="July2018",1.7,ifelse(wide1$variable=="Aug2018",1.8,ifelse(wide1$variable=="Sep2018",1.9,ifelse(wide1$variable=="Oct2018",2.0,ifelse(wide1$variable=="Nov2018",2.1,ifelse(wide1$variable=="Dec2018",2.2,ifelse(wide1$variable=="Jan2019",2.3,ifelse(wide1$variable=="Feb2019",2.4,ifelse(wide1$variable=="Mar2019",2.5,ifelse(wide1$variable=="Apr2019",2.6,ifelse(wide1$variable=="May2019",2.7,ifelse(wide1$variable=="June2019",2.8,ifelse(wide1$variable=="July2019",2.9,ifelse(wide1$variable=="Aug2019",3.0,ifelse(wide1$variable=="Sep2019",3.1,ifelse(wide1$variable=="Oct2019",3.2,ifelse(wide1$variable=="Nov2019",3.3,ifelse(wide1$variable=="Dec2019",3.4,ifelse(wide1$variable=="Jan2020",3.5,ifelse(wide1$variable=="Feb2020",3.6,ifelse(wide1$variable=="Mar2020",3.7,ifelse(wide1$variable=="Apr2020",3.8,ifelse(wide1$variable=="May2020",3.9,ifelse(wide1$variable=="June2020",4.0,ifelse(wide1$variable=="July2020",4.1,4.2)))))))))))))))))))))))))))))))
+
+
+wide1=wide1[,c(1:7,9,10,13,14,17,18,21,24,27,28,40,45)] 
+
+wide1=wide1[,c(6,7,5,1:3,8:19)]
+wide1$Level=ifelse(wide1$FacilityID=="87","Level 4",wide1$Level) 
+
+wide1$IP_Adm_Under_Five_NURSERY_NEWBORN=wide1$`IP_Adm_Under_Five-NURSERY_NEWBORN` #renaming the indicator
+wide1$`IP_Adm_Under_Five-NURSERY_NEWBORN`=NULL
+
+#=================CREATING MODELS TO PREDICT SIMULATIONS for INDICATORS
+wide1$Type=ifelse(wide1$Ownership=="MoH","Public","Private")
+wide1$Type=ifelse(wide1$Type=="Private",0,1)
+wide1$CIN=as.factor(wide1$CIN)
+wide1$Type=as.factor(wide1$Type)
+wide1$FacilityID=as.factor(wide1$FacilityID)
+
+##===========================-CS==========================
+library(lme4)
+fit <- lmer(Caesarian_Sections_MATERNITY ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+summary(fit)
+saveRDS(fit, "CS_model2.rds")
+
+##==========================-TD==========================================
+library(lme4)
+fit <- lmer(Total_deliveries_MATERNITY ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+summary(fit)
+saveRDS(fit, "TD_model2.rds")
+
+##===============================-LB==========================================
+library(lme4)
+fit <- lmer(Live_birth_MATERNITY ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+
+summary(fit)
+saveRDS(fit, "LB_model2.rds")
+
+##===================================-ADMS OVER 5 PAEDS================================
+library(lme4)
+fit <- lmer(IP_Adm_Over_Five_PAEDIATRICS ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+summary(fit)
+saveRDS(fit, "Adm_O5PAEDS_model2.rds")
+
+
+##===============================-ADMS UNDER 5 PAEDS================================
+library(lme4)
+fit <- lmer(IP_Adm_Under_Five_PAEDIATRICS ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+summary(fit)
+
+saveRDS(fit, "Adm_U5PAEDS_model2.rds")
+
+
+##==============================-ADMS OVER 5 MEDICAL================================
+library(lme4)
+fit <- lmer(IP_Adm_Over_Five_MEDICAL ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+summary(fit)
+
+saveRDS(fit, "Adm_O5MEDICAL_model2.rds")
+
+##=========================-ADMS UNDER 5 MEDICAL================================
+library(lme4)
+fit <- lmer(IP_Adm_Under_Five_MEDICAL ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+
+summary(fit)
+
+saveRDS(fit, "Adm_U5MEDICAL_model2.rds")
+
+##==========================-ADMS OVER 5 SURGICAL================================
+library(lme4)
+fit <- lmer(IP_Adm_Over_Five_SURGICAL ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+
+summary(fit)
+
+saveRDS(fit, "Adm_O5SURGICAL_model2.rds")
+
+
+#============================-ADMS UNDER 5 SURGICAL================================
+library(lme4)
+fit <- lmer(IP_Adm_Under_Five_SURGICAL ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+summary(fit)
+
+saveRDS(fit, "Adm_U5SURGICAL_model2.rds")
+
+
+##===========================-ADMS UNDER 5 NBU================================
+library(lme4)
+fit <- lmer(IP_Adm_Under_Five_NURSERY_NEWBORN ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+summary(fit)
+
+saveRDS(fit, "Adm_U5NBU_model2.rds")
+
+
+##==============================-ADMS OVER 5 MATERNITY================================
+library(lme4)
+fit <- lmer(IP_Admissions_Over_Five_MATERNITY ~ 1 + Time + CIN + Type +(1 | FacilityID), data = wide1)
+
+summary(fit)
+
+saveRDS(fit, "Adm_O5MATERNITY_model2.rds")
+
+
+
+
+###===========================MISSINGNESS PREDICTION====###
+library(optimx)
+
+#CS
+wide1$missing=ifelse(is.na(wide1$Caesarian_Sections_MATERNITY),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "bobyqa"),
+    nAGQ = 10)
+
+saveRDS(m,"CS_missingmodel2.rds")
+
+#TD
+wide1$missing=ifelse(is.na(wide1$Total_deliveries_MATERNITY),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "Nelder_Mead"),
+    nAGQ = 10)
+saveRDS(m,"TD_missingmodel2.rds")
+
+#LB
+wide1$missing=ifelse(is.na(wide1$Live_birth_MATERNITY),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "bobyqa"),
+    nAGQ = 10)
+
+saveRDS(m,"LB_missingmodel2.rds")
+
+#ADM MATERNITY
+wide1$missing=ifelse(is.na(wide1$IP_Admissions_Over_Five_MATERNITY),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "bobyqa"),
+    nAGQ = 10)
+
+saveRDS(m,"AdmMaternity_missingmodel2.rds")
+
+#============oVER5
+#Medical
+wide1$missing=ifelse(is.na(wide1$IP_Adm_Over_Five_MEDICAL),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "bobyqa"),
+    nAGQ = 10)
+
+saveRDS(m,"AdmO5Medical_missingmodel2.rds")
+
+
+#Surgical
+wide1$missing=ifelse(is.na(wide1$IP_Adm_Over_Five_SURGICAL),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "bobyqa"),
+    nAGQ = 10)
+
+saveRDS(m,"AdmO5Surgical_missingmodel2.rds")
+
+
+#Paeds
+wide1$missing=ifelse(is.na(wide1$IP_Adm_Over_Five_PAEDIATRICS),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "bobyqa"),
+    nAGQ = 10)
+
+saveRDS(m,"AdmO5Paeds_missingmodel2.rds")
+
+#=====Under 5
+#Medical
+wide1$missing=ifelse(is.na(wide1$IP_Adm_Under_Five_MEDICAL),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "bobyqa"),
+    nAGQ = 10)
+
+saveRDS(m,"AdmU5Medical_missingmodel2.rds")
+
+
+#Paediatrics
+wide1$missing=ifelse(is.na(wide1$IP_Adm_Under_Five_PAEDIATRICS),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "bobyqa"),
+    nAGQ = 10)
+
+saveRDS(m,"AdmU5Paeds_missingmodel2.rds")
+
+
+#Surgical
+wide1$missing=ifelse(is.na(wide1$IP_Adm_Under_Five_SURGICAL),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "bobyqa"),
+    nAGQ = 10)
+
+saveRDS(m,"AdmU5Surgical_missingmodel2.rds")
+
+#NBU
+wide1$missing=ifelse(is.na(wide1$IP_Adm_Under_Five_NURSERY_NEWBORN),1,0)
+
+m <- glmer(missing ~ 1+ Time + CIN + Type + (1 | FacilityID), data = wide1, family = binomial, control = glmerControl(optimizer = "bobyqa"),
+    nAGQ = 10)
+
+saveRDS(m,"AdmU5NBU_missingmodel2.rds")
+
+```
+
+
+
+
+
+
+
+
+
+
+
